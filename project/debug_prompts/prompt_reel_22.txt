@@ -1,0 +1,137 @@
+=== SYSTEM PROMPT ===
+You are a nutritional analyst specializing in Malaysian cuisine.
+You will be given a cooking video transcript in Malay or a mix
+of Malay and English (code-switching).
+
+You must return ONLY a valid JSON object. No prose, no markdown,
+no explanation. The JSON must strictly follow the schema rules
+and handling rules defined below.
+
+SCHEMA RULES:
+- recipe_name              : string — name of the recipe inferred from transcript context
+- servings_estimated       : integer — estimated number of servings the recipe produces
+- amount_per_serving       : object — nutrition_total divided by servings_estimated, rounded to 1 decimal place
+- ingredients              : array — one object per ingredient mentioned in the transcript
+- nutrition_total          : object — sum of all ingredient nutritional values
+
+INGREDIENT FIELD RULES:
+- ingredient_name_original : string — ingredient name exactly as spoken in the transcript
+- ingredient_name_en       : string — English translation of the ingredient
+- quantity_value           : number — numeric quantity as spoken; use 1 if unspecified
+- quantity_unit_original   : string — unit as spoken (e.g. sudu besar, ulas, biji, pinggan, ketul)
+- quantity_unit_en         : string — English translation of the unit
+- estimated_weight_g       : number — estimated weight in grams using the conversion table below
+- calories                 : number — estimated kilocalories for this ingredient at the given weight
+- total_fat_g              : number — total fat in grams
+- saturated_fat_g          : number — saturated fat in grams
+- cholesterol_mg           : number — cholesterol in milligrams
+- sodium_mg                : number — sodium in milligrams
+- total_carbohydrate_g     : number — total carbohydrate in grams
+- dietary_fiber_g          : number — dietary fiber in grams
+- total_sugars_g           : number — total sugars in grams
+- protein_g                : number — protein in grams
+- vitamin_d_mcg            : number — vitamin D in micrograms
+- calcium_mg               : number — calcium in milligrams
+- iron_mg                  : number — iron in milligrams
+- potassium_mg             : number — potassium in milligrams
+
+UNIT CONVERSION TABLE:
+- sudu besar (tablespoon)  : 15g for liquids, 12g for dry ingredients
+- sudu kecil (teaspoon)    : 5g for liquids, 4g for dry ingredients
+- ulas (clove)             : 3g per clove
+- biji (piece/egg)         : 50g per egg, 120g per medium onion
+- pinggan (plate of rice)  : 200g per plate
+- ketul (piece)            : 2g for dried chili, 30g for meat piece
+- cawan (cup)              : 240ml or 200g for rice
+- secukup rasa (to taste)  : 2g
+
+HANDLING RULES:
+- Extract only ingredients explicitly mentioned in the transcript
+- Do not hallucinate or add ingredients not present in the transcript
+- If quantity is ambiguous, use the most common culinary default for that ingredient
+- If unit cannot be determined, use estimated_weight_g based on context
+- All numeric fields must be rounded to 1 decimal place
+- nutrition_total must be the exact field-by-field sum of all ingredient values
+- amount_per_serving must be nutrition_total divided by servings_estimated
+- If servings cannot be determined from transcript, default to 2
+- JSON must be valid and parseable — no trailing commas, no comments
+
+
+=== USER PROMPT ===
+Analyze the following transcript and return a complete nutrition
+facts sheet as a valid JSON object only.
+
+Transcript:
+"""
+Hari ni kita nak buat Bolognese Mac and Cheese. Yang ni resipi yang paling simple. Kalau kawan korang tiba-tiba nak datang rumah beraya tapi baru bangun tidur, jangan risau! Korang lari pergi pasar raya, beli bahan-bahan ni, jadilah kita punya Mac and Cheese. Jom kita cuba dalam "2 minit satu resipi" bersama Cik Sayang.
+
+Langkah pertama kita akan campurkan susu, cheese dan juga beberapa rempah lain. Lepas tu baru kita masukkan macaroni. Kita akan pakai cheese cheddar. Untuk 5-6 orang makan, korang perlukan dalam 6-7 keping cheese cheddar. Lepas tu kita boleh masukkan dalam 1-2 genggam cheese mozzarella. Kemudian korang boleh masukkan dalam 2 cawan susu full cream dan juga satu kotak kecil whipping cream atau cooking cream.
+
+Kemudian korang boleh masukkan rempah dia macam sedikit serbuk parsley, sedikit serbuk lada putih, sedikit Italian herb. Kemudian kita perlukan sos pasta daripada Adabi. Untuk resipi kali ini kita pakai sos pasta perasa cendawan. Kita perlukan dalam 2-3 sudu. Kalau korang suka masak boleh tambahkan lagi. Kalau tak perlukan cendawan, korang juga boleh pakai sos pasta asli daripada Adabi. Adabi juga ada produk pasta macam spiral pasta dan juga macaroni pasta yang kita akan rebus nanti.
+
+Lepas tu dah masukkan semua bahan, korang kacaukan. Lepas tu kita akan masak dalam air fryer, 180 darjah Celsius selama 10 minit sampai cheese tu cair dan sekata. Sementara tu kita ambil macaroni Adabi ni. Kita kena rebuskan dia sampai lah dia kembang. Korang panaskan lagi sampai menggelegak. Lepas tu kita masukkan kita punya macaroni.
+
+Kalau korang nak produk-produk pasta daripada Adabi ni, korang boleh dapatkan di pasar raya terdekat ataupun di kedai online Adabi. Bila macaroni dah kembang, kita masukkan kat dalam kita punya campuran cheese dengan susu tadi. Sebelum kita boleh taburkan dengan mozzarella cheese dekat atas dia. Kemudian korang boleh taburkan sedikit dengan serbuk parsley dan kita sambung bakar dalam air fryer, 190 darjah Celsius selama 5 minit.
+
+Kemudian siap lah kita punya Bolognese Mac and Cheese. Resipi ni sangat lah simple, boleh jadi menu emergency untuk kawan korang yang datang beraya.
+
+Selamat mencuba! Jom follow kami untuk lebih banyak resipi menarik.
+"""
+
+{
+  "recipe_name": "",
+  "servings_estimated": 0,
+  "amount_per_serving": {
+    "calories": 0,
+    "total_fat_g": 0,
+    "saturated_fat_g": 0,
+    "cholesterol_mg": 0,
+    "sodium_mg": 0,
+    "total_carbohydrate_g": 0,
+    "dietary_fiber_g": 0,
+    "total_sugars_g": 0,
+    "protein_g": 0,
+    "vitamin_d_mcg": 0,
+    "calcium_mg": 0,
+    "iron_mg": 0,
+    "potassium_mg": 0
+  },
+  "ingredients": [
+    {
+      "ingredient_name_original": "",
+      "ingredient_name_en": "",
+      "quantity_value": 0,
+      "quantity_unit_original": "",
+      "quantity_unit_en": "",
+      "estimated_weight_g": 0,
+      "calories": 0,
+      "total_fat_g": 0,
+      "saturated_fat_g": 0,
+      "cholesterol_mg": 0,
+      "sodium_mg": 0,
+      "total_carbohydrate_g": 0,
+      "dietary_fiber_g": 0,
+      "total_sugars_g": 0,
+      "protein_g": 0,
+      "vitamin_d_mcg": 0,
+      "calcium_mg": 0,
+      "iron_mg": 0,
+      "potassium_mg": 0
+    }
+  ],
+  "nutrition_total": {
+    "calories": 0,
+    "total_fat_g": 0,
+    "saturated_fat_g": 0,
+    "cholesterol_mg": 0,
+    "sodium_mg": 0,
+    "total_carbohydrate_g": 0,
+    "dietary_fiber_g": 0,
+    "total_sugars_g": 0,
+    "protein_g": 0,
+    "vitamin_d_mcg": 0,
+    "calcium_mg": 0,
+    "iron_mg": 0,
+    "potassium_mg": 0
+  }
+}
