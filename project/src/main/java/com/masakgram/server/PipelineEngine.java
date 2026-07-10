@@ -415,7 +415,6 @@ public class PipelineEngine {
                 }
             }
 
-            // ✅ SECTION 2: INSERT INGREDIENTS (BATCH UPDATES)
          // ✅ SECTION 2: INSERT INGREDIENTS (BATCH UPDATES)
             if (generatedResultId != -1 && dto.ingredients != null && !dto.ingredients.isEmpty()) {
                 int insertedCount = 0;

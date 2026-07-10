@@ -1,6 +1,7 @@
-package com.masakgram.dashboard;
+package com.masakgram.server;
 
 import com.masakgram.db.DatabaseManager;
+
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -16,10 +17,10 @@ import java.util.Map;
 /**
  * Utility Engine to extract individual or all evaluation layers from the database
  * into standalone CSV output targets for Python analysis.
+ * NOW RUNS ON SERVER SIDE ONLY.
  */
 public class CSVExporterService {
 
-    // Map maintaining the relationship between output files and their corresponding evaluation queries
     private static final Map<String, String> QUERY_MAP = new LinkedHashMap<>();
 
     static {
@@ -129,7 +130,7 @@ public class CSVExporterService {
             "ORDER BY m.model_name, pt.technique_name;"
         );
 
-        // LAYER 3B : HALLUCINATION RATE (Calculated dynamically because ir.is_hallucinated is missing from schema)
+        // LAYER 3B : HALLUCINATION RATE
         QUERY_MAP.put("layer3b_hallucination.csv", 
             "SELECT e.experiment_id, r.reel_id_instagram AS video_id, m.model_name, pt.technique_name, e.rag_enabled, " + 
             "ir.name_original AS pred_name_original, ir.name_en AS pred_name_en, " + 
@@ -214,7 +215,7 @@ public class CSVExporterService {
         return new ArrayList<>(QUERY_MAP.keySet());
     }
 
-    public static void exportSingleLayer(String layerFileName, File targetDirectory) throws Exception {
+    public static String exportLayer(String layerFileName, File targetDirectory) throws Exception {
         if (!QUERY_MAP.containsKey(layerFileName)) {
             throw new IllegalArgumentException("Unknown evaluation layer: " + layerFileName);
         }
@@ -250,13 +251,15 @@ public class CSVExporterService {
                 writer.newLine();
             }
         }
+
+        return csvOutputTarget.getAbsolutePath();
     }
 
     public static List<String> exportAllLayers(File targetDirectory) throws Exception {
         List<String> successfullyExported = new ArrayList<>();
         for (String layerFile : QUERY_MAP.keySet()) {
             try {
-                exportSingleLayer(layerFile, targetDirectory);
+                exportLayer(layerFile, targetDirectory);
                 successfullyExported.add(layerFile);
             } catch (Exception e) {
                 System.err.println("Skipping " + layerFile + ": " + e.getMessage());

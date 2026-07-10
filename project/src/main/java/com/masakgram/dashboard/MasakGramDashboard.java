@@ -1,7 +1,9 @@
 package com.masakgram.dashboard;
 
-import com.formdev.flatlaf.FlatLightLaf; 
-import com.masakgram.db.DatabaseManager;
+import com.formdev.flatlaf.FlatLightLaf;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
@@ -12,29 +14,30 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 public class MasakGramDashboard extends JFrame {
 
     private static final long serialVersionUID = 1L;
 
     // Light Theme UI Palette
-    private static final Color BG_DARK      = new Color(245, 247, 250); 
-    private static final Color BG_SIDEBAR   = new Color(225, 230, 239); 
-    private static final Color CARD_BG      = new Color(255, 255, 255); 
-    private static final Color BLUE_ACCENT  = new Color(0, 123, 255);   
-    private static final Color TEXT_LIGHT   = new Color(33, 37, 41);    
-    private static final Color BORDER_COLOR = new Color(210, 216, 225); 
+    private static final Color BG_DARK = new Color(245, 247, 250);
+    private static final Color BG_SIDEBAR = new Color(225, 230, 239);
+    private static final Color CARD_BG = new Color(255, 255, 255);
+    private static final Color BLUE_ACCENT = new Color(0, 123, 255);
+    private static final Color TEXT_LIGHT = new Color(33, 37, 41);
+    private static final Color BORDER_COLOR = new Color(210, 216, 225);
+    
+    // Colors for ingredient status
+    private static final Color COLOR_MATCHED = new Color(40, 167, 69);
+    private static final Color COLOR_HALLUCINATED = new Color(220, 50, 50);
+    private static final Color COLOR_MISSING = new Color(255, 140, 0);
+    private static final Color COLOR_UNKNOWN = new Color(150, 150, 150);
 
     private JPanel mainContentCardPanel;
     private CardLayout cardLayout;
-    
+
     // Core Operational UI Components
     private DefaultTableModel matrixTableModel;
     private JTable matrixTable;
@@ -44,7 +47,7 @@ public class MasakGramDashboard extends JFrame {
     // Dynamic Live Metric Labels
     private JLabel lblStatTranscripts;
     private JLabel lblStatExperiments;
-    private JLabel lblStatSuccessFailure; 
+    private JLabel lblStatSuccessFailure;
 
     // Detail Panel UI Components
     private JLabel lblDetailId;
@@ -52,22 +55,42 @@ public class MasakGramDashboard extends JFrame {
     private JLabel lblDetailStatus;
     private JLabel lblDetailHallucinate;
     private JTextArea txtLlmNutrition;
-    private JTextArea txtLlmIngredients;
-    private JTextArea txtGtIngredients;
+    private JTextArea txtCombinedIngredients;
+    private JTextArea txtHallucinationReason;
 
     private static final String[] MODELS = {"Llama 3.2 (3B)", "Phi-4-mini (3.8B)", "Qwen 2.5 (3B)", "Gemma-SEA-LION v4 (4B)", "MedGemma (4B)"};
     private static final String[] TECHNIQUES = {"zero-shot", "few-shot", "chain-of-thought", "structured-output"};
+    
+    private static final String SERVER_HOST = "localhost";
+    private static final int SERVER_PORT = 12345;
+    private ObjectMapper mapper = new ObjectMapper();
 
     public MasakGramDashboard() {
         setTitle("MasakGramPrompt - Experiment Execution Engine");
-        setSize(1300, 850); 
+        setSize(1300, 850);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
 
-        // =================================================================
-        // SIDEBAR NAVIGATION
-        // =================================================================
+        // Build UI
+        JPanel sidebar = buildSidebar();
+        mainContentCardPanel = new JPanel(cardLayout);
+
+        mainContentCardPanel.add(buildRunExperimentPanel(), "RUN_PANEL");
+        mainContentCardPanel.add(buildMatrixStatusPanel(), "MATRIX_PANEL");
+
+        add(sidebar, BorderLayout.WEST);
+        add(mainContentCardPanel, BorderLayout.CENTER);
+
+        refreshAllData();
+        startAutoRefresh();
+    }
+
+    // ============================================================
+    // UI BUILDING METHODS
+    // ============================================================
+
+    private JPanel buildSidebar() {
         JPanel sidebar = new JPanel();
         sidebar.setBackground(BG_SIDEBAR);
         sidebar.setPreferredSize(new Dimension(220, getHeight()));
@@ -87,11 +110,9 @@ public class MasakGramDashboard extends JFrame {
         cardLayout = new CardLayout();
         mainContentCardPanel = new JPanel(cardLayout);
 
-        // CHANGED: Status Matrix first, then Run Experiment
         createSidebarMenuButton(sidebar, "[=] Status Matrix", "MATRIX_PANEL");
         createSidebarMenuButton(sidebar, "[>] Run Experiment", "RUN_PANEL");
-        
-        // CSV Export Button - Relocated to align with sidebar actions
+
         sidebar.add(Box.createVerticalStrut(20));
         JButton btnExportCsv = new JButton("Export to CSV");
         btnExportCsv.setMaximumSize(new Dimension(200, 42));
@@ -103,14 +124,7 @@ public class MasakGramDashboard extends JFrame {
         btnExportCsv.addActionListener(e -> exportToCSV());
         sidebar.add(btnExportCsv);
 
-        mainContentCardPanel.add(buildRunExperimentPanel(), "RUN_PANEL");
-        mainContentCardPanel.add(buildMatrixStatusPanel(), "MATRIX_PANEL");
-
-        add(sidebar, BorderLayout.WEST);
-        add(mainContentCardPanel, BorderLayout.CENTER);
-
-        refreshAllData();
-        startAutoRefresh();
+        return sidebar;
     }
 
     private void createSidebarMenuButton(JPanel sidebar, String text, String cardName) {
@@ -121,24 +135,10 @@ public class MasakGramDashboard extends JFrame {
         btn.setFont(new Font("Segoe UI", Font.PLAIN, 14));
         btn.addActionListener(e -> {
             cardLayout.show(mainContentCardPanel, cardName);
-            refreshAllData(); 
+            refreshAllData();
         });
         sidebar.add(btn);
         sidebar.add(Box.createVerticalStrut(10));
-    }
-
-    private void startAutoRefresh() {
-        Timer timer = new Timer(3000, e -> {
-            refreshMatrixStatusTable();
-            refreshMetrics();
-        });
-        timer.start();
-    }
-
-    private void refreshAllData() {
-        refreshMatrixStatusTable();
-        refreshMetrics();
-        clearDetailsPanel();
     }
 
     private JPanel buildRunExperimentPanel() {
@@ -179,7 +179,7 @@ public class MasakGramDashboard extends JFrame {
         consoleArea.setFont(new Font("Consolas", Font.BOLD, 13));
         consoleArea.setEditable(false);
         consoleArea.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        
+
         JScrollPane consoleScroll = new JScrollPane(consoleArea);
         consoleScroll.setBorder(BorderFactory.createTitledBorder(BorderFactory.createLineBorder(BORDER_COLOR), "Live Server Output Terminal"));
         consoleScroll.setPreferredSize(new Dimension(0, 300));
@@ -192,34 +192,23 @@ public class MasakGramDashboard extends JFrame {
         runBtn.setForeground(Color.WHITE);
         runBtn.setFont(new Font("Segoe UI", Font.BOLD, 15));
         runBtn.setPreferredSize(new Dimension(0, 48));
-        
+
         runBtn.addActionListener(e -> {
             String chosenModel = modelCombo.getSelectedItem().toString();
             String chosenTech = techCombo.getSelectedItem().toString();
-            
+
             new Thread(() -> {
                 runBtn.setEnabled(false);
                 consoleArea.setText("[Client Process] Connecting to MasakGramServer (localhost:12345)...\n");
-                try (
-                    Socket socket = new Socket("localhost", 12345);
-                    PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-                    BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
-                ) {
-                    out.println("BATCH_EXECUTE|" + chosenModel + "|" + chosenTech);
-                    String response;
-                    while ((response = in.readLine()) != null) {
-                        consoleArea.append(" " + response + "\n");
-                        if (response.startsWith("STATUS|COMPLETED") || response.startsWith("ERROR")) break;
-                    }
-                } catch (Exception ex) {
-                    consoleArea.append("\n[ERROR] Pipeline run failed: " + ex.getMessage() + "\n");
-                } finally {
-                    runBtn.setEnabled(true);
-                    refreshAllData();
+                String response = sendRequest("BATCH_EXECUTE", chosenModel + "|" + chosenTech);
+                if (response != null) {
+                    consoleArea.append(response + "\n");
                 }
+                runBtn.setEnabled(true);
+                refreshAllData();
             }).start();
         });
-        
+
         panel.add(runBtn, BorderLayout.SOUTH);
         return panel;
     }
@@ -234,10 +223,10 @@ public class MasakGramDashboard extends JFrame {
 
         JPanel headerBar = new JPanel(new BorderLayout());
         headerBar.setBackground(BG_DARK);
-        
+
         JPanel titleTextPanel = new JPanel(new BorderLayout(0, 4));
         titleTextPanel.setBackground(BG_DARK);
-        
+
         JLabel titleLabel = new JLabel("Transcript Execution Status Matrix");
         titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 22));
         titleLabel.setForeground(TEXT_LIGHT);
@@ -248,31 +237,29 @@ public class MasakGramDashboard extends JFrame {
         titleTextPanel.add(subLabel, BorderLayout.SOUTH);
         headerBar.add(titleTextPanel, BorderLayout.WEST);
 
-        // Selector Bar Elements - Increased dropdown size
         JPanel selectorWrapper = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 10));
         selectorWrapper.setBackground(BG_DARK);
         JLabel filterLabel = new JLabel("Active Prompt Matrix:");
         filterLabel.setFont(new Font("Segoe UI", Font.BOLD, 13));
         matrixPromptFilter = new JComboBox<>(TECHNIQUES);
         matrixPromptFilter.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-        matrixPromptFilter.setPreferredSize(new Dimension(220, 36)); // Made box bigger
+        matrixPromptFilter.setPreferredSize(new Dimension(220, 36));
         matrixPromptFilter.addActionListener(e -> {
             refreshMatrixStatusTable();
             refreshMetrics();
         });
-        
+
         selectorWrapper.add(filterLabel);
         selectorWrapper.add(matrixPromptFilter);
         headerBar.add(selectorWrapper, BorderLayout.EAST);
         topContainer.add(headerBar, BorderLayout.NORTH);
 
-        // Unified Performance Ribbon Layout
         JPanel metricsRibbon = new JPanel(new GridLayout(1, 3, 15, 0));
         metricsRibbon.setBackground(BG_DARK);
         lblStatTranscripts = createMetricBadge("Total Transcripts", "0", Color.DARK_GRAY);
         lblStatExperiments = createMetricBadge("Experiments Run", "0", BLUE_ACCENT);
         lblStatSuccessFailure = createMetricBadge("Technique Success / Failure Rate (%)", "0.0% / 0.0%", new Color(100, 40, 167));
-        
+
         metricsRibbon.add(lblStatTranscripts.getParent());
         metricsRibbon.add(lblStatExperiments.getParent());
         metricsRibbon.add(lblStatSuccessFailure.getParent());
@@ -280,11 +267,11 @@ public class MasakGramDashboard extends JFrame {
 
         panel.add(topContainer, BorderLayout.NORTH);
 
-        // Swapped "Verified By" with "Transcript File"
         String[] cols = {"ID", "Transcript File", "Llama 3.2", "Phi-4-mini", "Qwen 2.5", "Gemma-SEA", "MedGemma"};
         matrixTableModel = new DefaultTableModel(null, cols) {
             private static final long serialVersionUID = 1L;
-            @Override public boolean isCellEditable(int r, int c) { return false; }
+            @Override
+            public boolean isCellEditable(int r, int c) { return false; }
         };
 
         matrixTable = new JTable(matrixTableModel);
@@ -294,7 +281,7 @@ public class MasakGramDashboard extends JFrame {
         matrixTable.setGridColor(BORDER_COLOR);
         matrixTable.setCellSelectionEnabled(true);
         matrixTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        
+
         matrixTable.getSelectionModel().addListSelectionListener(this::onTableSelectionChanged);
         matrixTable.getColumnModel().getSelectionModel().addListSelectionListener(this::onTableSelectionChanged);
 
@@ -306,12 +293,16 @@ public class MasakGramDashboard extends JFrame {
         JScrollPane tableScroll = new JScrollPane(matrixTable);
         tableScroll.setBorder(BorderFactory.createLineBorder(BORDER_COLOR));
 
-        JPanel detailWorkspacePanel = buildTranscriptDetailPanel();
+        // ============================================================
+        // COMBINED DETAIL PANEL - Nutrition + Combined Ingredients + Hallucination Reason
+        // ============================================================
+        JPanel detailWorkspacePanel = buildCombinedDetailPanel();
+        
         JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tableScroll, detailWorkspacePanel);
         splitPane.setDividerLocation(320);
         splitPane.setResizeWeight(0.5);
         splitPane.setBorder(null);
-        
+
         panel.add(splitPane, BorderLayout.CENTER);
 
         JPanel legendPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 25, 5));
@@ -325,25 +316,30 @@ public class MasakGramDashboard extends JFrame {
         return panel;
     }
 
-    private JPanel buildTranscriptDetailPanel() {
+
+    // ============================================================
+    // COMBINED DETAIL PANEL
+    // ============================================================
+    private JPanel buildCombinedDetailPanel() {
         JPanel detailPanel = new JPanel(new BorderLayout(10, 10));
         detailPanel.setBackground(CARD_BG);
         detailPanel.setBorder(BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(BORDER_COLOR, 1),
-            BorderFactory.createEmptyBorder(15, 15, 15, 15)
+            BorderFactory.createEmptyBorder(12, 15, 12, 15)
         ));
 
-        JPanel headerMeta = new JPanel(new FlowLayout(FlowLayout.LEFT, 25, 5));
+        // Header with metadata
+        JPanel headerMeta = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 3));
         headerMeta.setBackground(CARD_BG);
 
         lblDetailId = new JLabel("Transcript ID: --");
-        lblDetailId.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        lblDetailName = new JLabel("File Name: Select an execution cell...");
-        lblDetailName.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        lblDetailId.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        lblDetailName = new JLabel("File: Select an execution cell...");
+        lblDetailName.setFont(new Font("Segoe UI", Font.BOLD, 13));
         lblDetailStatus = new JLabel("Status: --");
-        lblDetailStatus.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        lblDetailHallucinate = new JLabel("HALLUCINATION DETECTED: --");
-        lblDetailHallucinate.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        lblDetailStatus.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        lblDetailHallucinate = new JLabel("🔍 Hallucination: --");
+        lblDetailHallucinate.setFont(new Font("Segoe UI", Font.BOLD, 13));
         lblDetailHallucinate.setForeground(Color.GRAY);
 
         headerMeta.add(lblDetailId);
@@ -352,19 +348,122 @@ public class MasakGramDashboard extends JFrame {
         headerMeta.add(lblDetailHallucinate);
         detailPanel.add(headerMeta, BorderLayout.NORTH);
 
-        JPanel bodyGrid = new JPanel(new GridLayout(1, 3, 12, 0));
-        bodyGrid.setBackground(CARD_BG);
+        // ============================================================
+        // MAIN BODY: Nutrition (Left) + Combined Ingredients (Right)
+        // ============================================================
+        // Wrapped in a horizontal JSplitPane (instead of a fixed GridLayout) so the
+        // user gets a draggable divider handle to resize Nutrition vs Ingredients width.
 
-        txtLlmNutrition = createDetailsTextArea();
-        txtLlmIngredients = createDetailsTextArea();
-        txtGtIngredients = createDetailsTextArea();
+        // LEFT: Nutrition Summary
+        JPanel nutritionPanel = new JPanel(new BorderLayout());
+        nutritionPanel.setBackground(CARD_BG);
+        JLabel nutritionTitle = new JLabel("📊 Nutrition Summary");
+        nutritionTitle.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        nutritionTitle.setForeground(new Color(0, 102, 204));
+        
+        txtLlmNutrition = new JTextArea();
+        txtLlmNutrition.setEditable(false);
+        txtLlmNutrition.setFont(new Font("Consolas", Font.PLAIN, 13));
+        txtLlmNutrition.setBackground(new Color(248, 248, 255));
+        txtLlmNutrition.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+        txtLlmNutrition.setText("Select a model cell to view...");
+        
+        nutritionPanel.add(nutritionTitle, BorderLayout.NORTH);
+        nutritionPanel.add(new JScrollPane(txtLlmNutrition), BorderLayout.CENTER);
+        nutritionPanel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(new Color(0, 102, 204, 80), 1),
+            BorderFactory.createEmptyBorder(5, 5, 5, 5)
+        ));
 
-        bodyGrid.add(createTitledPanelWrapper(new JScrollPane(txtLlmNutrition), "LLM Nutrition Summary Output"));
-        bodyGrid.add(createTitledPanelWrapper(new JScrollPane(txtLlmIngredients), "LLM Extracted Ingredients"));
-        bodyGrid.add(createTitledPanelWrapper(new JScrollPane(txtGtIngredients), "Human Ground Truth Reference"));
+        // RIGHT: Combined Ingredients with Hallucination Analysis
+        JPanel combinedPanel = new JPanel(new BorderLayout());
+        combinedPanel.setBackground(CARD_BG);
+        
+        JPanel combinedHeader = new JPanel(new BorderLayout());
+        combinedHeader.setBackground(CARD_BG);
+        JLabel combinedTitle = new JLabel("🔬 Ingredients Analysis");
+        combinedTitle.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        combinedTitle.setForeground(new Color(150, 50, 50));
+        combinedHeader.add(combinedTitle, BorderLayout.WEST);
+        
+        // Legend for the combined view
+        JPanel legendMini = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        legendMini.setBackground(CARD_BG);
+        legendMini.add(createMiniLegend("✅", "Matched", COLOR_MATCHED));
+        legendMini.add(createMiniLegend("⚠️", "Hallucinated", COLOR_HALLUCINATED));
+        legendMini.add(createMiniLegend("❌", "Missing", COLOR_MISSING));
+        combinedHeader.add(legendMini, BorderLayout.EAST);
+        
+        combinedPanel.add(combinedHeader, BorderLayout.NORTH);
 
-        detailPanel.add(bodyGrid, BorderLayout.CENTER);
+        // Combined ingredients text area
+        txtCombinedIngredients = new JTextArea();
+        txtCombinedIngredients.setEditable(false);
+        txtCombinedIngredients.setFont(new Font("Consolas", Font.PLAIN, 12));
+        txtCombinedIngredients.setBackground(new Color(255, 252, 248));
+        txtCombinedIngredients.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+        txtCombinedIngredients.setText("Select a model cell to view analysis...");
+        
+        combinedPanel.add(new JScrollPane(txtCombinedIngredients), BorderLayout.CENTER);
+        combinedPanel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(new Color(150, 50, 50, 80), 1),
+            BorderFactory.createEmptyBorder(5, 5, 5, 5)
+        ));
+
+        JSplitPane bodySplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, nutritionPanel, combinedPanel);
+        bodySplitPane.setResizeWeight(0.35);   // Ingredients panel starts a bit wider since its content is denser
+        bodySplitPane.setContinuousLayout(true);
+        bodySplitPane.setBorder(null);
+        bodySplitPane.setBackground(CARD_BG);
+        detailPanel.add(bodySplitPane, BorderLayout.CENTER);
+
+        // ============================================================
+        // BOTTOM: Hallucination Reason Explanation
+        // ============================================================
+        JPanel reasonPanel = new JPanel(new BorderLayout());
+        reasonPanel.setBackground(CARD_BG);
+        reasonPanel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(1, 0, 0, 0, BORDER_COLOR),
+            BorderFactory.createEmptyBorder(8, 5, 0, 5)
+        ));
+        
+        JLabel reasonTitle = new JLabel("💡 Hallucination Analysis");
+        reasonTitle.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        reasonTitle.setForeground(COLOR_HALLUCINATED);
+        reasonPanel.add(reasonTitle, BorderLayout.NORTH);
+        
+        txtHallucinationReason = new JTextArea();
+        txtHallucinationReason.setEditable(false);
+        txtHallucinationReason.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        txtHallucinationReason.setBackground(CARD_BG);
+        txtHallucinationReason.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+        txtHallucinationReason.setText("Analysis will appear here when an experiment is selected...");
+        txtHallucinationReason.setLineWrap(true);
+        txtHallucinationReason.setWrapStyleWord(true);
+        
+        JScrollPane reasonScroll = new JScrollPane(txtHallucinationReason);
+        reasonScroll.setBorder(null);
+        reasonScroll.setPreferredSize(new Dimension(0, 160)); // fixed height — content scrolls inside, never grows the panel
+        reasonScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        reasonScroll.getVerticalScrollBar().setUnitIncrement(16);
+
+        reasonPanel.add(reasonScroll, BorderLayout.CENTER);
+        detailPanel.add(reasonPanel, BorderLayout.SOUTH);
+
         return detailPanel;
+    }
+
+    private JPanel createMiniLegend(String icon, String label, Color color) {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        panel.setBackground(CARD_BG);
+        JLabel iconLabel = new JLabel(icon);
+        iconLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        JLabel textLabel = new JLabel(label);
+        textLabel.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        textLabel.setForeground(color);
+        panel.add(iconLabel);
+        panel.add(textLabel);
+        return panel;
     }
 
     private JTextArea createDetailsTextArea() {
@@ -409,81 +508,371 @@ public class MasakGramDashboard extends JFrame {
         return label;
     }
 
-    private boolean isDialogOpen = false;
-    private int lastSelectedTranscriptId = -1; // Track the last selected transcript
+    // ============================================================
+    // CLIENT-SERVER COMMUNICATION
+    // ============================================================
 
-    private void onTableSelectionChanged(ListSelectionEvent e) {
-        if (e.getValueIsAdjusting()) return;
-        
-        int selectedRow = matrixTable.getSelectedRow();
-        int selectedCol = matrixTable.getSelectedColumn();
-        
-        if (selectedRow == -1) return;
+    private String sendRequest(String command, String data) {
+        try (Socket socket = new Socket(SERVER_HOST, SERVER_PORT);
+             PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
 
-        // If clicked on column 1 ("Transcript File"), launch popup displaying full content
-        if (selectedCol == 1) {
-            // Prevent multiple dialog windows from opening
-            if (isDialogOpen) {
-                return;
+            out.println(command + "|" + data);
+            StringBuilder response = new StringBuilder();
+            String line;
+            while ((line = in.readLine()) != null) {
+                response.append(line).append("\n");
+                if (line.startsWith("STATUS|COMPLETED") || line.startsWith("ERROR") || 
+                    line.startsWith("SUCCESS|") || line.startsWith("DATA|")) {
+                    break;
+                }
             }
-            
-            int transcriptId = (int) matrixTable.getValueAt(selectedRow, 0);
-            String fileName = (String) matrixTable.getValueAt(selectedRow, 1);
-            
-            // Store the selected transcript ID
-            lastSelectedTranscriptId = transcriptId;
-            
-            // Show the dialog
-            showTranscriptContentDialog(transcriptId, fileName);
-            return;
-        }
-
-        // For other columns (2+), update the details panel
-        if (selectedCol >= 2) {
-            try {
-                int transcriptId = (int) matrixTable.getValueAt(selectedRow, 0);
-                String modelHeader = matrixTable.getColumnName(selectedCol);
-                String activePrompt = matrixPromptFilter.getSelectedItem().toString();
-                
-                fetchAndDisplaySchemaDetails(transcriptId, modelHeader, activePrompt);
-            } catch (Exception ex) {
-                clearDetailsPanel();
-            }
+            return response.toString().trim();
+        } catch (Exception e) {
+            return "ERROR|" + e.getMessage();
         }
     }
 
-    // Displays content window when Transcript File layout is clicked
-    private void showTranscriptContentDialog(int transcriptId, String fileName) {
-        // Prevent multiple dialog windows
-        if (isDialogOpen) {
-            return;
+    // ============================================================
+    // DATA REFRESH METHODS
+    // ============================================================
+
+    private void refreshAllData() {
+        refreshMatrixStatusTable();
+        refreshMetrics();
+        clearDetailsPanel();
+    }
+
+    private void startAutoRefresh() {
+        Timer timer = new Timer(3000, e -> {
+            refreshMatrixStatusTable();
+            refreshMetrics();
+        });
+        timer.start();
+    }
+
+    private void refreshMatrixStatusTable() {
+        if (matrixTableModel == null) return;
+
+        String selectedTechnique = matrixPromptFilter.getSelectedItem().toString();
+        String response = sendRequest("GET_MATRIX", selectedTechnique);
+
+        matrixTableModel.setRowCount(0);
+
+        if (response.startsWith("SUCCESS|")) {
+            try {
+                String jsonData = response.substring(8);
+                JsonNode root = mapper.readTree(jsonData);
+                JsonNode dataNode = root.get("data");
+
+                if (dataNode != null && dataNode.isArray()) {
+                    for (JsonNode row : dataNode) {
+                        Object[] rowData = new Object[7];
+                        rowData[0] = row.get("transcript_id").asInt();
+                        rowData[1] = row.has("transcript_file") ? row.get("transcript_file").asText() : "No Name";
+                        rowData[2] = row.has("Llama 3.2") ? row.get("Llama 3.2").asText() : "-";
+                        rowData[3] = row.has("Phi-4-mini") ? row.get("Phi-4-mini").asText() : "-";
+                        rowData[4] = row.has("Qwen 2.5") ? row.get("Qwen 2.5").asText() : "-";
+                        rowData[5] = row.has("Gemma-SEA") ? row.get("Gemma-SEA").asText() : "-";
+                        rowData[6] = row.has("MedGemma") ? row.get("MedGemma").asText() : "-";
+                        matrixTableModel.addRow(rowData);
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Error parsing matrix data: " + e.getMessage());
+                e.printStackTrace();
+            }
+        } else {
+            System.err.println("Error fetching matrix: " + response);
         }
+    }
+
+    private void refreshMetrics() {
+        if (lblStatTranscripts == null || matrixPromptFilter == null) return;
+
+        String selectedTechnique = matrixPromptFilter.getSelectedItem().toString();
+        String response = sendRequest("GET_METRICS", selectedTechnique);
+
+        if (response.startsWith("SUCCESS|")) {
+            try {
+                String jsonData = response.substring(8);
+                JsonNode metrics = mapper.readTree(jsonData);
+
+                lblStatTranscripts.setText(metrics.has("total_transcripts") ? String.valueOf(metrics.get("total_transcripts").asInt()) : "0");
+                lblStatExperiments.setText(metrics.has("total_experiments") ? String.valueOf(metrics.get("total_experiments").asInt()) : "0");
+
+                String successRate = metrics.has("success_rate") ? metrics.get("success_rate").asText() : "0.0%";
+                String failureRate = metrics.has("failure_rate") ? metrics.get("failure_rate").asText() : "0.0%";
+                lblStatSuccessFailure.setText(successRate + " / " + failureRate);
+            } catch (Exception e) {
+                System.err.println("Error parsing metrics: " + e.getMessage());
+                e.printStackTrace();
+            }
+        } else {
+            System.err.println("Error fetching metrics: " + response);
+        }
+    }
+
+ // ============================================================
+ // FETCH DETAILS - WITH PROPER HALLUCINATION DISPLAY
+ // ============================================================
+ private void fetchAndDisplaySchemaDetails(int transcriptId, String modelHeaderName, String techniqueName) {
+     clearDetailsPanel();
+
+     String data = transcriptId + "|" + modelHeaderName + "|" + techniqueName;
+     String response = sendRequest("GET_DETAILS", data);
+
+     System.out.println("=== FETCH DETAILS RESPONSE ===");
+     if (response == null) {
+         System.err.println("Response is null!");
+         return;
+     }
+     System.out.println("Response: " + response.substring(0, Math.min(200, response.length())));
+
+     if (response.startsWith("SUCCESS|")) {
+         try {
+             String jsonData = response.substring(8);
+             JsonNode details = mapper.readTree(jsonData);
+
+             // Update header
+             lblDetailId.setText("Transcript ID: " + details.get("transcript_id").asInt());
+             lblDetailName.setText("File: " + (details.has("file_name") ? details.get("file_name").asText() : "Unknown"));
+             lblDetailStatus.setText("Status: " + (details.has("status") ? details.get("status").asText().toUpperCase() : "UNKNOWN"));
+
+             // ============================================================
+             // NUTRITION SUMMARY
+             // ============================================================
+             StringBuilder nutritionText = new StringBuilder();
+             JsonNode nutrition = details.get("nutrition");
+             if (nutrition != null && !nutrition.isNull()) {
+                 nutritionText.append("Recipe: ").append(nutrition.has("recipe_name") && !nutrition.get("recipe_name").isNull() ? nutrition.get("recipe_name").asText() : "N/A").append("\n");
+                 nutritionText.append("Servings: ").append(nutrition.has("servings") && !nutrition.get("servings").isNull() ? nutrition.get("servings").asInt() : "N/A").append("\n\n");
+                 nutritionText.append("Calories: ").append(nutrition.has("calories") && !nutrition.get("calories").isNull() ? String.format("%.1f", nutrition.get("calories").asDouble()) : "N/A").append(" kcal\n");
+                 nutritionText.append("Protein: ").append(nutrition.has("protein") && !nutrition.get("protein").isNull() ? String.format("%.1f", nutrition.get("protein").asDouble()) : "N/A").append(" g\n");
+                 nutritionText.append("Carbs: ").append(nutrition.has("carbs") && !nutrition.get("carbs").isNull() ? String.format("%.1f", nutrition.get("carbs").asDouble()) : "N/A").append(" g\n");
+                 nutritionText.append("Fat: ").append(nutrition.has("fat") && !nutrition.get("fat").isNull() ? String.format("%.1f", nutrition.get("fat").asDouble()) : "N/A").append(" g");
+             } else {
+                 nutritionText.append("No nutrition data available");
+             }
+             txtLlmNutrition.setText(nutritionText.toString());
+
+             // ============================================================
+             // GET HALLUCINATION ANALYSIS
+             // ============================================================
+             JsonNode hallucinationAnalysis = details.get("hallucination_analysis");
+             
+             // Debug output
+             System.out.println("hallucinationAnalysis exists: " + (hallucinationAnalysis != null));
+             if (hallucinationAnalysis != null) {
+                 System.out.println("hallucinationAnalysis: " + hallucinationAnalysis.toString());
+             }
+
+             if (hallucinationAnalysis != null && !hallucinationAnalysis.isNull()) {
+                 // Get the arrays
+                 JsonNode hallucinated = hallucinationAnalysis.get("hallucinated");
+                 JsonNode missing = hallucinationAnalysis.get("missing");
+                 JsonNode matched = hallucinationAnalysis.get("matched");
+                 
+                 System.out.println("Hallucinated count: " + (hallucinated != null ? hallucinated.size() : 0));
+                 System.out.println("Missing count: " + (missing != null ? missing.size() : 0));
+                 System.out.println("Matched count: " + (matched != null ? matched.size() : 0));
+
+                 // ============================================================
+                 // BUILD COMBINED INGREDIENTS DISPLAY
+                 // ============================================================
+                 StringBuilder combinedText = new StringBuilder();
+                 
+                 if ((hallucinated != null && hallucinated.size() > 0) || 
+                     (missing != null && missing.size() > 0) || 
+                     (matched != null && matched.size() > 0)) {
+                     
+                     combinedText.append("┌─────────────────────────────────────────────────────────────────┐\n");
+                     combinedText.append("│  LLM PREDICTED                    │  GROUND TRUTH              │\n");
+                     combinedText.append("├─────────────────────────────────────────────────────────────────┤\n");
+
+                     // Display matched pairs
+                     if (matched != null && matched.isArray()) {
+                         for (JsonNode m : matched) {
+                             String llmName = m.has("llm_name") ? m.get("llm_name").asText() : "Unknown";
+                             String gtName = m.has("gt_name") ? m.get("gt_name").asText() : "Unknown";
+                             combinedText.append("│ ✅ ").append(padRight(llmName, 30));
+                             combinedText.append(" │ ").append(padRight(gtName, 25)).append("│\n");
+                         }
+                     }
+
+                     // Display hallucinated ingredients
+                     if (hallucinated != null && hallucinated.isArray()) {
+                         for (JsonNode h : hallucinated) {
+                             String name = h.has("name") ? h.get("name").asText() : "Unknown";
+                             combinedText.append("│ ⚠️ ").append(padRight(name + " [HALLUCINATED]", 30));
+                             combinedText.append(" │ ").append(padRight("(NOT IN GT)", 25)).append("│\n");
+                         }
+                     }
+
+                     // Display missing ingredients
+                     if (missing != null && missing.isArray()) {
+                         for (JsonNode m : missing) {
+                             String name = m.has("name") ? m.get("name").asText() : "Unknown";
+                             combinedText.append("│ ❌ ").append(padRight("(MISSING)", 30));
+                             combinedText.append(" │ ").append(padRight(name, 25)).append("│\n");
+                         }
+                     }
+
+                     combinedText.append("└─────────────────────────────────────────────────────────────────┘\n");
+
+                     // Add statistics
+                     int totalLLM = hallucinationAnalysis.has("total_llm_ingredients") ? 
+                         hallucinationAnalysis.get("total_llm_ingredients").asInt() : 0;
+                     int totalGT = hallucinationAnalysis.has("total_gt_ingredients") ? 
+                         hallucinationAnalysis.get("total_gt_ingredients").asInt() : 0;
+                     int hallucinatedCount = hallucinationAnalysis.has("hallucinated_count") ? 
+                         hallucinationAnalysis.get("hallucinated_count").asInt() : 0;
+                     int missingCount = hallucinationAnalysis.has("missing_count") ? 
+                         hallucinationAnalysis.get("missing_count").asInt() : 0;
+                     int matchedCount = hallucinationAnalysis.has("matched_count") ? 
+                         hallucinationAnalysis.get("matched_count").asInt() : 0;
+
+                     combinedText.append("\n📊 Summary: ");
+                     combinedText.append("LLM: ").append(totalLLM).append(" | ");
+                     combinedText.append("GT: ").append(totalGT).append(" | ");
+                     combinedText.append("✅ Matched: ").append(matchedCount).append(" | ");
+                     combinedText.append("⚠️ Hallucinated: ").append(hallucinatedCount).append(" | ");
+                     combinedText.append("❌ Missing: ").append(missingCount);
+                 } else {
+                     combinedText.append("✅ All ingredients matched correctly!");
+                 }
+                 
+                 txtCombinedIngredients.setText(combinedText.toString());
+
+                 // ============================================================
+                 // HALLUCINATION REASON
+                 // ============================================================
+                 StringBuilder reasonText = new StringBuilder();
+                 String status = hallucinationAnalysis.has("status") ? 
+                     hallucinationAnalysis.get("status").asText() : "UNKNOWN";
+                 String summary = hallucinationAnalysis.has("summary") ? 
+                     hallucinationAnalysis.get("summary").asText() : "";
+
+                 reasonText.append("Status: ").append(status).append("\n");
+                 reasonText.append("Summary: ").append(summary).append("\n\n");
+
+                 // Build detailed report
+                 if (hallucinated != null && hallucinated.size() > 0) {
+                     reasonText.append("⚠️ HALLUCINATED INGREDIENTS (Extra):\n");
+                     for (JsonNode h : hallucinated) {
+                         String name = h.has("name") ? h.get("name").asText() : "Unknown";
+                         String reason = h.has("reason") ? h.get("reason").asText() : "Not in GT";
+                         reasonText.append("  • ").append(name).append(" → ").append(reason).append("\n");
+                     }
+                     reasonText.append("\n");
+                 }
+
+                 if (missing != null && missing.size() > 0) {
+                     reasonText.append("❌ MISSING INGREDIENTS (Not Predicted):\n");
+                     for (JsonNode m : missing) {
+                         String name = m.has("name") ? m.get("name").asText() : "Unknown";
+                         String reason = m.has("reason") ? m.get("reason").asText() : "Not predicted";
+                         reasonText.append("  • ").append(name).append(" → ").append(reason).append("\n");
+                     }
+                     reasonText.append("\n");
+                 }
+
+                 if (matched != null && matched.size() > 0) {
+                     reasonText.append("✅ CORRECTLY MATCHED:\n");
+                     for (JsonNode m : matched) {
+                         String llmName = m.has("llm_name") ? m.get("llm_name").asText() : "Unknown";
+                         String gtName = m.has("gt_name") ? m.get("gt_name").asText() : "Unknown";
+                         reasonText.append("  • ").append(llmName).append(" ↔ ").append(gtName).append("\n");
+                     }
+                 }
+
+                 txtHallucinationReason.setText(reasonText.toString());
+
+                 // Update hallucination status label
+                 String displayStatus = status.replace("_", " ");
+                 lblDetailHallucinate.setText("🔍 Hallucination: " + displayStatus);
+                 
+                 if (status.equals("NO_HALLUCINATION")) {
+                     lblDetailHallucinate.setForeground(new Color(40, 167, 69));
+                 } else if (status.startsWith("HALLUCINATION")) {
+                     lblDetailHallucinate.setForeground(Color.RED);
+                 } else {
+                     lblDetailHallucinate.setForeground(Color.GRAY);
+                 }
+
+             } else {
+                 txtCombinedIngredients.setText("No hallucination analysis available");
+                 txtHallucinationReason.setText("No analysis data available for this experiment.");
+                 lblDetailHallucinate.setText("🔍 Hallucination: N/A");
+                 lblDetailHallucinate.setForeground(Color.GRAY);
+             }
+
+         } catch (Exception e) {
+             System.err.println("Error parsing details: " + e.getMessage());
+             e.printStackTrace();
+             clearDetailsPanel();
+         }
+     } else {
+         System.err.println("Error fetching details: " + response);
+         clearDetailsPanel();
+     }
+ }
+
+    // Helper class for matched pairs
+    private static class MatchedPair {
+        String llmName;
+        String gtName;
+        String matchType;
+    }
+
+    private String padRight(String text, int length) {
+        if (text == null) text = "";
+        if (text.length() >= length) return text.substring(0, length);
+        return text + " ".repeat(length - text.length());
+    }
+
+    private void clearDetailsPanel() {
+        if (lblDetailId == null) return;
+        lblDetailId.setText("Transcript ID: --");
+        lblDetailName.setText("File: Select an execution cell...");
+        lblDetailStatus.setText("Status: --");
+        lblDetailHallucinate.setText("🔍 Hallucination: --");
+        lblDetailHallucinate.setForeground(Color.GRAY);
+        txtLlmNutrition.setText("Select a model cell to view...");
+        txtCombinedIngredients.setText("Select a model cell to view analysis...");
+        txtHallucinationReason.setText("Analysis will appear here when an experiment is selected...");
+    }
+
+    // ============================================================
+    // TRANSCRIPT VIEWER
+    // ============================================================
+
+    private boolean isDialogOpen = false;
+    private int lastSelectedTranscriptId = -1;
+
+    private void showTranscriptContentDialog(int transcriptId, String fileName) {
+        if (isDialogOpen) return;
         isDialogOpen = true;
-        
+
         JDialog dialog = new JDialog(this, "Transcript Viewer: " + fileName, true);
         dialog.setSize(600, 450);
         dialog.setLocationRelativeTo(this);
-        
-        // Reset the flag and clear selection when dialog is closed
+
         dialog.addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosed(java.awt.event.WindowEvent windowEvent) {
                 isDialogOpen = false;
-                // Clear the selection after dialog closes
                 matrixTable.clearSelection();
-                // Also clear the details panel
                 clearDetailsPanel();
             }
             @Override
             public void windowClosing(java.awt.event.WindowEvent windowEvent) {
                 isDialogOpen = false;
-                // Clear the selection after dialog closes
                 matrixTable.clearSelection();
-                // Also clear the details panel
                 clearDetailsPanel();
             }
         });
-        
+
         JTextArea area = new JTextArea();
         area.setEditable(false);
         area.setLineWrap(true);
@@ -491,360 +880,96 @@ public class MasakGramDashboard extends JFrame {
         area.setFont(new Font("Consolas", Font.PLAIN, 13));
         area.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        // Get the file path from the database
-        String sql = "SELECT file_path FROM transcript WHERE transcript_id = ?";
-        String filePath = null;
-        
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setInt(1, transcriptId);
-            try (ResultSet rs = pstmt.executeQuery()) {
-                if (rs.next()) {
-                    filePath = rs.getString("file_path");
+        String response = sendRequest("GET_TRANSCRIPT", String.valueOf(transcriptId));
+
+        if (response.startsWith("SUCCESS|")) {
+            try {
+                String jsonData = response.substring(8);
+                JsonNode result = mapper.readTree(jsonData);
+                if (result.has("content") && !result.get("content").isNull()) {
+                    area.setText(result.get("content").asText());
+                } else {
+                    area.setText("No content available for this transcript.");
                 }
+            } catch (Exception e) {
+                area.setText("Error parsing transcript: " + e.getMessage());
             }
-        } catch (Exception ex) {
-            area.setText("Error fetching file path from database:\n" + ex.getMessage());
-            dialog.add(new JScrollPane(area), BorderLayout.CENTER);
-            dialog.setVisible(true);
-            return;
-        }
-
-        // If file path is null or empty, show error
-        if (filePath == null || filePath.isEmpty()) {
-            area.setText("No file path associated with this transcript.\n\n" +
-                       "Transcript ID: " + transcriptId + "\n" +
-                       "File Name: " + fileName);
-            dialog.add(new JScrollPane(area), BorderLayout.CENTER);
-            dialog.setVisible(true);
-            return;
-        }
-
-        // Try to read the file content
-        File transcriptFile = new File(filePath);
-        if (!transcriptFile.exists()) {
-            area.setText("Transcript file not found at:\n" + filePath + "\n\n" +
-                       "Please verify the file exists in the specified location.\n\n" +
-                       "Transcript ID: " + transcriptId + "\n" +
-                       "File Name: " + fileName);
-            dialog.add(new JScrollPane(area), BorderLayout.CENTER);
-            dialog.setVisible(true);
-            return;
-        }
-
-        // Read the file content
-        try (BufferedReader reader = new BufferedReader(new java.io.FileReader(transcriptFile))) {
-            StringBuilder content = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                content.append(line).append("\n");
-            }
-            area.setText(content.toString());
-        } catch (Exception ex) {
-            area.setText("Error reading transcript file:\n" + ex.getMessage() + "\n\n" +
-                       "File Path: " + filePath + "\n" +
-                       "Transcript ID: " + transcriptId + "\n" +
-                       "File Name: " + fileName);
+        } else {
+            area.setText("Error: " + response);
         }
 
         dialog.add(new JScrollPane(area), BorderLayout.CENTER);
         dialog.setVisible(true);
     }
 
-    private void fetchAndDisplaySchemaDetails(int transcriptId, String modelHeaderName, String techniqueName) {
-        clearDetailsPanel();
+    // ============================================================
+    // TABLE SELECTION HANDLER
+    // ============================================================
 
-        String transcriptSql = "SELECT verified_by_name FROM transcript WHERE transcript_id = ?";
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(transcriptSql)) {
-            pstmt.setInt(1, transcriptId);
-            try (ResultSet rs = pstmt.executeQuery()) {
-                if (rs.next()) {
-                    lblDetailId.setText("Transcript ID: " + transcriptId);
-                    lblDetailName.setText("File Name: " + rs.getString("verified_by_name"));
-                }
-            }
-        } catch (Exception ex) {
-            System.err.println("Transcript Query Error: " + ex.getMessage());
-        }
+    private void onTableSelectionChanged(ListSelectionEvent e) {
+        if (e.getValueIsAdjusting()) return;
 
-        String experimentSql = "SELECT e.status, nr.result_id, nr.recipe_name, nr.servings_estimated, "
-                             + "       nr.total_calories, nr.total_protein_g, nr.total_carbohydrate_g, nr.total_fat_g "
-                             + "FROM experiment e "
-                             + "INNER JOIN llm_model m ON e.model_id = m.model_id "
-                             + "INNER JOIN prompt_technique pt ON e.technique_id = pt.technique_id "
-                             + "LEFT JOIN nutrition_result nr ON e.experiment_id = nr.experiment_id "
-                             + "WHERE e.transcript_id = ? AND m.model_name LIKE ? AND pt.technique_name = ?";
-
-        int resolvedResultId = -1;
-        List<String> llmIngredientsList = new ArrayList<>();
-        List<String> groundTruthIngredientsList = new ArrayList<>();
-
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(experimentSql)) {
-            
-            pstmt.setInt(1, transcriptId);
-            pstmt.setString(2, "%" + modelHeaderName.substring(0, Math.min(modelHeaderName.length(), 8)) + "%");
-            pstmt.setString(3, techniqueName);
-            
-            try (ResultSet rs = pstmt.executeQuery()) {
-                if (rs.next()) {
-                    String status = rs.getString("status");
-                    lblDetailStatus.setText("Status: " + (status != null ? status.toUpperCase() : "PENDING"));
-                    resolvedResultId = rs.getInt("result_id");
-                    
-                    if (status != null && status.equalsIgnoreCase("completed") && resolvedResultId > 0) {
-                        StringBuilder sb = new StringBuilder();
-                        sb.append("Recipe extracted: ").append(rs.getString("recipe_name")).append("\n");
-                        sb.append("Est. Servings: ").append(rs.getInt("servings_estimated")).append("\n\n");
-                        sb.append("Totals Summary:\n");
-                        sb.append(" • Calories: ").append(rs.getFloat("total_calories")).append(" kcal\n");
-                        sb.append(" • Protein: ").append(rs.getFloat("total_protein_g")).append(" g\n");
-                        sb.append(" • Carbs: ").append(rs.getFloat("total_carbohydrate_g")).append(" g\n");
-                        sb.append(" • Fat: ").append(rs.getFloat("total_fat_g")).append(" g");
-                        txtLlmNutrition.setText(sb.toString());
-                    } else {
-                        txtLlmNutrition.setText("No parsed analytical metrics matching selection context.");
-                    }
-                } else {
-                    lblDetailStatus.setText("Status: UNEXECUTED");
-                    txtLlmNutrition.setText("Experiment not yet executed for this condition matrix cross-tabulation.");
-                }
-            }
-        } catch (Exception ex) {
-            System.err.println("Experiment Context Verification Drop Failure: " + ex.getMessage());
-        }
-
-        if (resolvedResultId > 0) {
-            String llmIngSql = "SELECT name_original, quantity_value, unit_original FROM ingredient_result WHERE result_id = ?";
-            try (Connection conn = DatabaseManager.getConnection();
-                 PreparedStatement pstmt = conn.prepareStatement(llmIngSql)) {
-                pstmt.setInt(1, resolvedResultId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    StringBuilder sb = new StringBuilder();
-                    while (rs.next()) {
-                        String name = rs.getString("name_original");
-                        float qty = rs.getFloat("quantity_value");
-                        String unit = rs.getString("unit_original");
-                        
-                        String fullLine = String.format("• %s (%.1f %s)", name, qty, (unit != null ? unit : ""));
-                        sb.append(fullLine).append("\n");
-                        if (name != null) llmIngredientsList.add(name.trim().toLowerCase());
-                    }
-                    txtLlmIngredients.setText(sb.length() > 0 ? sb.toString() : "No mapped item outputs extracted.");
-                }
-            } catch (Exception ex) {
-                System.err.println("LLM Ingredient Parse Error: " + ex.getMessage());
-            }
-        } else {
-            txtLlmIngredients.setText("---");
-        }
-
-        String gtIngSql = "SELECT gti.name_original, gti.quantity_expression "
-                        + "FROM ground_truth_ingredient gti "
-                        + "INNER JOIN ground_truth_reel gtr ON gti.gt_reel_id = gtr.gt_reel_id "
-                        + "WHERE gtr.transcript_id = ?";
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(gtIngSql)) {
-            pstmt.setInt(1, transcriptId);
-            try (ResultSet rs = pstmt.executeQuery()) {
-                StringBuilder sb = new StringBuilder();
-                while (rs.next()) {
-                    String name = rs.getString("name_original");
-                    String expr = rs.getString("quantity_expression");
-                    
-                    sb.append("• ").append(name).append(" [").append(expr != null ? expr : "").append("]\n");
-                    if (name != null) groundTruthIngredientsList.add(name.trim().toLowerCase());
-                }
-                txtGtIngredients.setText(sb.length() > 0 ? sb.toString() : "No baseline reference text provided.");
-            }
-        } catch (Exception ex) {
-            System.err.println("Ground Truth Context Verification Failure: " + ex.getMessage());
-        }
-
-        if (llmIngredientsList.isEmpty() || groundTruthIngredientsList.isEmpty()) {
-            lblDetailHallucinate.setText("HALLUCINATION DETECTED: N/A");
-            lblDetailHallucinate.setForeground(Color.GRAY);
-        } else {
-            boolean hallucinated = false;
-            for (String llmIng : llmIngredientsList) {
-                boolean matched = false;
-                for (String gtIng : groundTruthIngredientsList) {
-                    if (gtIng.contains(llmIng) || llmIng.contains(gtIng)) {
-                        matched = true;
-                        break;
-                    }
-                }
-                if (!matched) {
-                    hallucinated = true;
-                    break;
-                }
-            }
-
-            if (hallucinated) {
-                lblDetailHallucinate.setText("HALLUCINATION DETECTED: YES");
-                lblDetailHallucinate.setForeground(Color.RED);
-            } else {
-                lblDetailHallucinate.setText("HALLUCINATION DETECTED: NO");
-                lblDetailHallucinate.setForeground(new Color(40, 167, 69));
-            }
-        }
-    }
-
-    private void clearDetailsPanel() {
-        if (lblDetailId == null) return;
-        lblDetailId.setText("Transcript ID: --");
-        lblDetailName.setText("File Name: Select an execution cell...");
-        lblDetailStatus.setText("Status: --");
-        lblDetailHallucinate.setText("HALLUCINATION DETECTED: --");
-        lblDetailHallucinate.setForeground(Color.GRAY);
-        txtLlmNutrition.setText("");
-        txtLlmIngredients.setText("");
-        txtGtIngredients.setText("");
-    }
-
-    private void refreshMatrixStatusTable() {
-        if (matrixTableModel == null) return;
-        
-        String selectedPrompt = matrixPromptFilter.getSelectedItem().toString();
         int selectedRow = matrixTable.getSelectedRow();
         int selectedCol = matrixTable.getSelectedColumn();
-        matrixTableModel.setRowCount(0);
 
-        // Updated query to pull 'file_name' instead of 'verified_by_name'
-        String sql = "SELECT t.transcript_id, "
-                   + "       COALESCE(t.file_name, 'No Name') AS transcript_file, "
-                   + "       m.model_name, "
-                   + "       e.status, "
-                   + "       e.experiment_id "
-                   + "FROM transcript t "
-                   + "LEFT JOIN experiment e ON t.transcript_id = e.transcript_id "
-                   + "     AND e.technique_id = (SELECT technique_id FROM prompt_technique WHERE technique_name = ? LIMIT 1) "
-                   + "LEFT JOIN llm_model m ON e.model_id = m.model_id "
-                   + "ORDER BY t.transcript_id ASC";
+        if (selectedRow == -1) return;
 
-        Map<Integer, Object[]> matrixRowsMap = new LinkedHashMap<>();
+        // Transcript File column - show content dialog
+        if (selectedCol == 1) {
+            if (isDialogOpen) return;
 
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            
-            pstmt.setString(1, selectedPrompt);
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    int id = rs.getInt("transcript_id");
-                    String fileTranscript = rs.getString("transcript_file");
-                    String model = rs.getString("model_name");
-                    String status = rs.getString("status");
-                    int expId = rs.getInt("experiment_id");
-                    boolean hasExpId = !rs.wasNull();
-
-                    if (!matrixRowsMap.containsKey(id)) {
-                        matrixRowsMap.put(id, new Object[]{id, fileTranscript, "-", "-", "-", "-", "-"});
-                    }
-
-                    if (model != null && status != null) {
-                        Object[] rowData = matrixRowsMap.get(id);
-                        int colIndex = getModelColumnIndex(model);
-                        if (colIndex != -1) {
-                            String displayValue = status.toUpperCase();
-                            if (hasExpId) {
-                                displayValue += " (#" + expId + ")";
-                            }
-                            rowData[colIndex] = displayValue;
-                        }
-                    }
-                }
-            }
-
-            for (Object[] row : matrixRowsMap.values()) {
-                matrixTableModel.addRow(row);
-            }
-            
-            if (selectedRow != -1 && selectedRow < matrixTable.getRowCount()) {
-                matrixTable.setRowSelectionInterval(selectedRow, selectedRow);
-                if (selectedCol != -1 && selectedCol < matrixTable.getColumnCount()) {
-                    matrixTable.setColumnSelectionInterval(selectedCol, selectedCol);
-                }
-            }
-        } catch (Exception ex) {
-            System.err.println("Matrix Table Data Pivot Error: " + ex.getMessage());
-        }
-    }
-
-    private int getModelColumnIndex(String modelName) {
-        if (modelName.contains("Llama 3.2")) return 2;
-        if (modelName.contains("Phi-4")) return 3;
-        if (modelName.contains("Qwen 2.5")) return 4;
-        if (modelName.contains("Gemma-SEA")) return 5;
-        if (modelName.contains("MedGemma")) return 6;
-        return -1;
-    }
-
-    // Finished implementation tracking technique-specific success rates dynamically 
- // Finished implementation tracking technique-specific success rates dynamically 
-    private void refreshMetrics() {
-        if (lblStatTranscripts == null || matrixPromptFilter == null) return;
-        
-        String selectedTechnique = matrixPromptFilter.getSelectedItem().toString();
-
-        String countTranscriptsSql = "SELECT COUNT(*) AS total FROM transcript";
-        // CHANGED: Show ALL experiments, not filtered by technique
-        String runningExperimentsSql = "SELECT COUNT(*) AS total FROM experiment";
-        String rateSql = "SELECT "
-                       + "  SUM(CASE WHEN LOWER(e.status) = 'completed' THEN 1 ELSE 0 END) as success_count, "
-                       + "  SUM(CASE WHEN LOWER(e.status) = 'failed' THEN 1 ELSE 0 END) as failure_count "
-                       + "FROM experiment e "
-                       + "INNER JOIN prompt_technique pt ON e.technique_id = pt.technique_id "
-                       + "WHERE pt.technique_name = ?";
-
-        try (Connection conn = DatabaseManager.getConnection()) {
-            // 1. Total Transcripts
-            try (PreparedStatement pst = conn.prepareStatement(countTranscriptsSql);
-                 ResultSet rs = pst.executeQuery()) {
-                if (rs.next()) lblStatTranscripts.setText(String.valueOf(rs.getInt("total")));
-            }
-            
-            // 2. ALL Experiments Count (not filtered)
-            try (PreparedStatement pst = conn.prepareStatement(runningExperimentsSql);
-                 ResultSet rs = pst.executeQuery()) {
-                if (rs.next()) lblStatExperiments.setText(String.valueOf(rs.getInt("total")));
-            }
-
-            // 3. Dynamic Technique Specific Success/Failure calculation (percentage only)
-            try (PreparedStatement pst = conn.prepareStatement(rateSql)) {
-                pst.setString(1, selectedTechnique);
-                try (ResultSet rs = pst.executeQuery()) {
-                    if (rs.next()) {
-                        int success = rs.getInt("success_count");
-                        int failure = rs.getInt("failure_count");
-                        int total = success + failure;
-                        
-                        if (total > 0) {
-                            double successPct = ((double) success / total) * 100;
-                            double failurePct = ((double) failure / total) * 100;
-                            lblStatSuccessFailure.setText(String.format("%.1f%% / %.1f%%", successPct, failurePct));
-                        } else {
-                            lblStatSuccessFailure.setText("0.0% / 0.0%");
-                        }
-                    }
-                }
-            }
-        } catch (Exception ex) {
-            System.err.println("Metrics Load Error: " + ex.getMessage());
-        }
-    }
-
- // Replace the old exportToCSV() method at the bottom of your MasakGramDashboard class with this:
-
-    private void exportToCSV() {
-        // 1. Get the list of available evaluation layers from the service
-        java.util.List<String> layers = CSVExporterService.getAvailableLayers();
-        if (layers == null || layers.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "No evaluation layers found in the export engine.", "Error", JOptionPane.ERROR_MESSAGE);
+            int transcriptId = (int) matrixTable.getValueAt(selectedRow, 0);
+            String fileName = (String) matrixTable.getValueAt(selectedRow, 1);
+            lastSelectedTranscriptId = transcriptId;
+            showTranscriptContentDialog(transcriptId, fileName);
             return;
         }
 
-        // 2. Prompt the user to select exactly which layer they want to export
+        // Model columns - show details
+        if (selectedCol >= 2) {
+            try {
+                int transcriptId = (int) matrixTable.getValueAt(selectedRow, 0);
+                String modelHeader = matrixTable.getColumnName(selectedCol);
+                String activePrompt = matrixPromptFilter.getSelectedItem().toString();
+                fetchAndDisplaySchemaDetails(transcriptId, modelHeader, activePrompt);
+            } catch (Exception ex) {
+                clearDetailsPanel();
+            }
+        }
+    }
+
+    // ============================================================
+    // EXPORT TO CSV
+    // ============================================================
+
+    private void exportToCSV() {
+        String response = sendRequest("GET_LAYERS", "");
+        
+        List<String> layers = new ArrayList<>();
+        if (response.startsWith("SUCCESS|")) {
+            try {
+                String jsonData = response.substring(8);
+                JsonNode result = mapper.readTree(jsonData);
+                JsonNode layersArray = result.get("layers");
+                if (layersArray != null && layersArray.isArray()) {
+                    for (JsonNode layer : layersArray) {
+                        layers.add(layer.asText());
+                    }
+                }
+            } catch (Exception e) {
+                JOptionPane.showMessageDialog(this, "Error fetching layers: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        } else {
+            JOptionPane.showMessageDialog(this, "Failed to get layers: " + response, "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        if (layers.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No evaluation layers available.", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
         String selectedLayer = (String) JOptionPane.showInputDialog(
             this,
             "Select the evaluation layer dataset to export:",
@@ -855,31 +980,39 @@ public class MasakGramDashboard extends JFrame {
             layers.get(0)
         );
 
-        // If the user cancels or closes the dialog, stop execution
         if (selectedLayer == null) return;
 
-        // 3. Select the Target Directory where the file should be saved
         JFileChooser folderChooser = new JFileChooser();
         folderChooser.setDialogTitle("Select Destination Folder for: " + selectedLayer);
         folderChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        
+
         int userSelection = folderChooser.showSaveDialog(this);
         if (userSelection != JFileChooser.APPROVE_OPTION) return;
-        
+
         File targetDir = folderChooser.getSelectedFile();
 
-        // 4. Execute the targeted database query in a background thread to keep the UI fluid
         new Thread(() -> {
             try {
-                CSVExporterService.exportSingleLayer(selectedLayer, targetDir);
+                String result = sendRequest("EXPORT_CSV", selectedLayer + "|" + targetDir.getAbsolutePath());
                 
-                // Notify user of success on the Event Dispatch Thread (EDT)
-                SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
-                    this,
-                    "Successfully exported layer dataset to:\n" + new File(targetDir, selectedLayer).getAbsolutePath(),
-                    "Export Complete",
-                    JOptionPane.INFORMATION_MESSAGE
-                ));
+                SwingUtilities.invokeLater(() -> {
+                    if (result.startsWith("SUCCESS|")) {
+                        String filePath = result.substring(8);
+                        JOptionPane.showMessageDialog(
+                            this,
+                            "Successfully exported layer dataset to:\n" + filePath,
+                            "Export Complete",
+                            JOptionPane.INFORMATION_MESSAGE
+                        );
+                    } else {
+                        JOptionPane.showMessageDialog(
+                            this,
+                            "Export failed:\n" + result,
+                            "Error",
+                            JOptionPane.ERROR_MESSAGE
+                        );
+                    }
+                });
             } catch (Exception ex) {
                 ex.printStackTrace();
                 SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
@@ -892,8 +1025,13 @@ public class MasakGramDashboard extends JFrame {
         }).start();
     }
 
+    // ============================================================
+    // CELL RENDERER
+    // ============================================================
+
     private static class StatusCellRenderer extends DefaultTableCellRenderer {
         private static final long serialVersionUID = 1L;
+
         @Override
         public Component getTableCellRendererComponent(JTable table, Object val, boolean isSel, boolean hasFocus, int r, int c) {
             Component cell = super.getTableCellRendererComponent(table, val, isSel, hasFocus, r, c);
@@ -911,6 +1049,10 @@ public class MasakGramDashboard extends JFrame {
             return cell;
         }
     }
+
+    // ============================================================
+    // MAIN
+    // ============================================================
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
