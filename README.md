@@ -9,9 +9,7 @@ This is the MasakGramPrompt project for nutritional analytics from code-switched
 ## Project Structure
 - `/project` - Contains the complete Java source code and Maven configuration.
 - `/transcription` - Contains all 40 transcript files used for the experiments.
-- `/database` - Contains the exported masakgramprompt.sql file with the full database structure and all project data.
-- `/metric_evaluation` - Contains sample CSV exports of the 10 evaluation layers for metric computation and performance analysis.
-  
+
 ## Team Members
 - MUHAMMAD ANIQ IMAN BIN MOHD SHAIDI - B032410601
 - MUHAMMAD AMIR HAKEEM BIN ZUL - B032410555
